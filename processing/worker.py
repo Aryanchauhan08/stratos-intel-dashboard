@@ -100,6 +100,8 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                     # No more rows; break inner batching loop
                     break
 
+                # Aggressive logging as requested
+                print(f"[WORKER] Found {len(pending)} items to process.")
                 logger.info("DEBUG: Found %d raw rows in the database", len(pending))
                 total_fetched += len(pending)
                 logger.info(
@@ -163,6 +165,9 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                         row.status = "error"
                         db.flush()
                         stats["errors"] += 1
+
+                    # Throttling to prevent CPU/Memory spikes in cloud
+                    time.sleep(2)
 
                 db.commit()
                 if batch_processed > 0:

@@ -67,12 +67,9 @@ def load_models() -> None:
         try:
             _nlp = spacy.load("en_core_web_sm")
             logger.info("spaCy model 'en_core_web_sm' loaded.")
-        except OSError:
-            logger.error(
-                "spaCy model 'en_core_web_sm' not found. "
-                "Run: python -m spacy download en_core_web_sm"
-            )
-            raise
+        except Exception as e:
+            logger.error(f"CRITICAL: Failed to load SpaCy model: {e}. Switching to lightweight fallback.")
+            _nlp = None # Explicitly None to trigger fallback
 
     if _vader is None:
         from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer  # noqa: PLC0415
@@ -107,23 +104,53 @@ def _clean(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Fallback Location Extractor (Regex + Country List)
+# ---------------------------------------------------------------------------
+_COMMON_COUNTRIES = [
+    "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
+    "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina", "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso", "Burundi",
+    "Cabo Verde", "Cambodia", "Cameroon", "Canada", "Central African Republic", "Chad", "Chile", "China", "Colombia", "Comoros", "Congo", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czech Republic",
+    "Denmark", "Djibouti", "Dominica", "Dominican Republic",
+    "Ecuador", "Egypt", "El Salvador", "Equatorial Guinea", "Eritrea", "Estonia", "Eswatini", "Ethiopia",
+    "Fiji", "Finland", "France",
+    "Gabon", "Gambia", "Georgia", "Germany", "Ghana", "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana",
+    "Haiti", "Honduras", "Hungary",
+    "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland", "Israel", "Italy",
+    "Jamaica", "Japan", "Jordan",
+    "Kazakhstan", "Kenya", "Kiribati", "Korea, North", "Korea, South", "Kosovo", "Kuwait", "Kyrgyzstan",
+    "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg",
+    "Madagascar", "Malawi", "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius", "Mexico", "Micronesia", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco", "Mozambique", "Myanmar",
+    "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand", "Nicaragua", "Niger", "Nigeria", "North Macedonia", "Norway",
+    "Oman",
+    "Pakistan", "Palau", "Palestine", "Panama", "Papua New Guinea", "Paraguay", "Peru", "Philippines", "Poland", "Portugal",
+    "Qatar",
+    "Romania", "Russia", "Rwanda",
+    "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines", "Samoa", "San Marino", "Sao Tome and Principe", "Saudi Arabia", "Senegal", "Serbia", "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands", "Somalia", "South Africa", "South Sudan", "Spain", "Sri Lanka", "Sudan", "Suriname", "Sweden", "Switzerland", "Syria",
+    "Taiwan", "Tajikistan", "Tanzania", "Thailand", "Timor-Leste", "Togo", "Tonga", "Trinidad and Tobago", "Tunisia", "Turkey", "Turkmenistan", "Tuvalu",
+    "Uganda", "Ukraine", "United Arab Emirates", "United Kingdom", "United States", "USA", "UK", "Uruguay", "Uzbekistan",
+    "Vanuatu", "Vatican City", "Venezuela", "Vietnam",
+    "Yemen",
+    "Zambia", "Zimbabwe"
+]
+
+def extract_locations_fallback(text: str) -> list[str]:
+    """Lightweight regex-based country extractor for when SpaCy is unavailable."""
+    text_clean = _clean(text)
+    locations = []
+    for country in _COMMON_COUNTRIES:
+        # Use word boundaries to avoid partial matches
+        if re.search(r'\b' + re.escape(country) + r'\b', text_clean, re.IGNORECASE):
+            locations.append(country)
+    return locations
+
+# ---------------------------------------------------------------------------
 # Named Entity Recognition — location extraction
 # ---------------------------------------------------------------------------
 def extract_locations(text: str) -> list[str]:
-    """Return unique GPE / LOC entity strings found in *text*.
-
-    Parameters
-    ----------
-    text:
-        Raw post content.
-
-    Returns
-    -------
-    list[str]
-        Deduplicated list of location name strings (order preserved).
-    """
+    """Return unique GPE / LOC entity strings found in *text*."""
     if _nlp is None:
-        raise RuntimeError("Models not loaded. Call load_models() first.")
+        logger.debug("NER: SpaCy not loaded. Using fallback country extractor.")
+        return extract_locations_fallback(text)
 
     doc = _nlp(_clean(text))
     seen: set[str] = set()
@@ -134,6 +161,11 @@ def extract_locations(text: str) -> list[str]:
             if name and name not in seen:
                 seen.add(name)
                 locations.append(name)
+    
+    # If SpaCy found nothing, still try the fallback as a safety net
+    if not locations:
+        locations = extract_locations_fallback(text)
+        
     return locations
 
 
