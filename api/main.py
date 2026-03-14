@@ -123,7 +123,12 @@ def get_activity(
 
     # Optional filters
     if source is not None:
-        query = query.filter(func.lower(SocialActivity.source) == source.lower())
+        source_val = source.lower()
+        if source_val == "gdelt_gkg":
+            source_val = "gdelt"
+        elif source_val == "rss_feed":
+            source_val = "rss"
+        query = query.filter(func.lower(SocialActivity.source) == source_val)
 
     if min_sentiment is not None:
         query = query.filter(ProcessedActivity.sentiment_score >= min_sentiment)
