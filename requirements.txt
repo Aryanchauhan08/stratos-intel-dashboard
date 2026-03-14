@@ -11,3 +11,4 @@ SQLAlchemy==2.0.34
 uvicorn==0.41.0
 vaderSentiment==3.3.2
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+psycopg2-binary
