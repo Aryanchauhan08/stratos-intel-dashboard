@@ -281,8 +281,9 @@ if __name__ == "__main__":
             db.add(activity)
             db.commit()
         except Exception as exc:
-            logger.error("Failed to save record to DB: %s", exc)
             db.rollback()
+            print(f"CRITICAL DB SAVE ERROR (Mastodon Smoke Test): {exc}")
+            logger.error("Failed to save record to DB: %s", exc)
         finally:
             db.close()
 

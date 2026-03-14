@@ -30,7 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from database.models import create_tables
+from database.models import create_tables, SessionLocal, SocialActivity
 from ingestion.gdelt_client import run_gdelt_ingestion_loop, fetch_latest_gkg, gkg_row_to_activity
 from ingestion.mastodon_client import stream_public
 from ingestion.rss_client import run_rss_ingestion_loop
@@ -52,7 +52,32 @@ _worker_task: asyncio.Task | None = None
 async def _run_mastodon_stream() -> None:
     """Run the Mastodon public stream in a thread."""
     def _store(record: dict) -> None:
-        logger.info("[mastodon] %s", record.get("text", "")[:80])
+        db = SessionLocal()
+        try:
+            from datetime import datetime
+            timestamp_str = record.get("timestamp")
+            dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")) if timestamp_str else None
+            
+            activity = SocialActivity(
+                source=record["source"],
+                topic=record.get("topic"),
+                text=record["text"],
+                timestamp=dt,
+                raw_location=record.get("raw_location"),
+                latitude=record.get("latitude"),
+                longitude=record.get("longitude"),
+                keywords=record.get("keywords") or [],
+                status="pending"
+            )
+            db.add(activity)
+            db.commit()
+            logger.info("[mastodon] Saved: %s", record.get("text", "")[:80])
+        except Exception as e:
+            db.rollback()
+            print(f"CRITICAL DB SAVE ERROR (Mastodon): {e}")
+            logger.error(f"Critical SQL error during Mastodon save: {e}")
+        finally:
+            db.close()
 
     await asyncio.to_thread(stream_public, _store)
 

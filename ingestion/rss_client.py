@@ -99,11 +99,16 @@ def fetch_rss_feeds() -> int:
                 new_articles_count += 1
                 
         # Commit all new articles for this cycle
-        db.commit()
-        if new_articles_count > 0:
-            logger.info(f"SUCCESS: Processed {new_articles_count} new RSS articles")
-        else:
-            logger.info("No new RSS articles found this cycle.")
+        try:
+            db.commit()
+            if new_articles_count > 0:
+                logger.info(f"SUCCESS: Processed {new_articles_count} new RSS articles")
+            else:
+                logger.info("No new RSS articles found this cycle.")
+        except Exception as e:
+            db.rollback()
+            print(f"CRITICAL DB SAVE ERROR (RSS): {e}")
+            logger.error(f"Critical SQL error during RSS commit: {e}")
             
     except Exception as e:
         logger.error(f"Error while fetching RSS feeds: {e}")

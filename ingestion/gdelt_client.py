@@ -283,7 +283,12 @@ def run_gdelt_ingestion_loop(poll_interval: int = 900, max_rows: int = 100):
                 db.add(activity)
                 inserted_count += 1
             
-            db.commit()
+            try:
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                print(f"CRITICAL DB SAVE ERROR (GDELT): {e}")
+                logger.error(f"Critical SQL error during GDELT commit: {e}")
             
             if inserted_count > 0:
                 logger.info("SUCCESS: Processed %d GDELT articles", inserted_count)
