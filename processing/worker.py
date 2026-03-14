@@ -132,8 +132,8 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                             time.sleep(2)
                             # Return minimal result to allow fallback
                             result = {
-                                "latitude": None, 
-                                "longitude": None, 
+                                "latitude": 0.0, 
+                                "longitude": 0.0, 
                                 "extracted_locations": [], 
                                 "geocoded_location": "Rate-Limited Fallback"
                             }
@@ -183,17 +183,20 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                             result["longitude"] or 0,
                             result["sentiment_label"],
                         )
+                        
+                        # COMMIT IMMEDIATELY after each successful (or fallback) geocode
+                        db.commit()
 
                     except Exception as exc:  # noqa: BLE001
                         logger.error("Error processing row %s: %s", row.id, exc)
                         row.status = "error"
                         db.flush()
+                        db.commit() # Commit the error status
                         stats["errors"] += 1
 
                     # Throttling to prevent CPU/Memory spikes in cloud
                     time.sleep(2)
 
-                db.commit()
                 if batch_processed > 0:
                     print(f"[WORKER] Successfully processed {batch_processed} items")
                     logger.info("SUCCESS: Processed %d posts", batch_processed)

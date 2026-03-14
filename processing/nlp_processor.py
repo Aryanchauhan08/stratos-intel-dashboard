@@ -279,14 +279,18 @@ def geocode(place: str) -> dict | None:
         time.sleep(_NOMINATIM_DELAY - elapsed)
 
     geocoder = _get_geocoder()
-    from geopy.exc import GeocoderUnavailable
+    from geopy.exc import GeocoderUnavailable, GeocoderQueryError
     
     try:
-        # Mandatory 1.5s delay to strictly comply with nominatim 1 req/s
+        # Debug Print as requested
+        print(f"DEBUG: Geocoding location: {place}...")
+        
+        # Mandatory 1.5s delay immediately before geocode
         time.sleep(1.5)
         
         _last_request_time = time.monotonic()
         location = geocoder.geocode(place, timeout=10)
+        
         if location:
             result = {"lat": round(location.latitude, 6), "lon": round(location.longitude, 6)}
             _geo_cache.set(place, result["lat"], result["lon"])
@@ -295,13 +299,12 @@ def geocode(place: str) -> dict | None:
         else:
             logger.debug("Nominatim returned no result for %r", place)
             return None
-    except GeocoderUnavailable:
-        print('Rate limited, sleeping 5s...')
-        time.sleep(5)
-        return None
+    except (GeocoderUnavailable, GeocoderQueryError) as exc:
+        print(f"Geocoding Fallback (429/Error): {exc}. Assigning 0,0.")
+        return {"lat": 0.0, "lon": 0.0}
     except Exception as exc:  # noqa: BLE001
         logger.warning("Geocoding error for %r: %s", place, exc)
-        return None
+        return {"lat": 0.0, "lon": 0.0}
 
 
 # ---------------------------------------------------------------------------
