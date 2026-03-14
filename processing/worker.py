@@ -149,7 +149,7 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                                 result["geocoded_location"] = "Unknown (Fallback)"
 
                         processed_row = ProcessedActivity(
-                            id=uuid.uuid4(),
+                            id=str(uuid.uuid4()),
                             source_id=row.id,
                             topic=result.get("topic") or row.topic,
                             source_text=row.text or "",
