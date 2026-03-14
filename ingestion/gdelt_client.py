@@ -249,38 +249,21 @@ def gkg_row_to_activity(row: pd.Series) -> dict:
 # ---------------------------------------------------------------------------
 # Quick smoke test
 # ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    import sys
-    from pathlib import Path
-    import time
-    from datetime import datetime
-
-    # Ensure project root is in path so we can import 'database.models'
-    project_root = str(Path(__file__).resolve().parent.parent)
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
-
-    from database.models import SocialActivity, SessionLocal
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
-
-    print("Connecting to GDELT GKG endpoint — polling every 15 minutes (900s).\n")
-
+def run_gdelt_ingestion_loop(poll_interval: int = 900, max_rows: int = 100):
+    """
+    Run an infinite loop that polls GDELT GKG every `poll_interval` seconds.
+    """
+    logger.info("Starting GDELT ingestion loop (interval=%ds)...", poll_interval)
     while True:
         db = SessionLocal()
         try:
             logger.info("Fetching latest GDELT GKG update…")
-            df = fetch_latest_gkg(max_rows=100)
+            df = fetch_latest_gkg(max_rows=max_rows)
             
             inserted_count = 0
             for _, row in df.iterrows():
                 record = gkg_row_to_activity(row)
                 
-                # Check if we successfully extracted text/URL
                 if not record.get("text"):
                     continue
 
@@ -307,14 +290,38 @@ if __name__ == "__main__":
             else:
                 logger.info("No valid records found in this GDELT batch.")
 
-        except KeyboardInterrupt:
-            print("\nStopped by user.")
-            break
         except Exception as exc:
-            logger.error("GDELT polling loop crashed: %s", exc)
+            logger.error("GDELT polling loop encountered an error: %s", exc)
             db.rollback()
         finally:
             db.close()
         
-        logger.info("Sleeping for 15 minutes…")
-        time.sleep(900)
+        logger.info("GDELT cycle complete. Sleeping for %ds…", poll_interval)
+        time.sleep(poll_interval)
+
+
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    import time
+    from datetime import datetime
+
+    # Ensure project root is in path so we can import 'database.models'
+    project_root = str(Path(__file__).resolve().parent.parent)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    from database.models import SocialActivity, SessionLocal
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    print("Connecting to GDELT GKG endpoint — polling every 15 minutes (900s).\n")
+
+    try:
+        run_gdelt_ingestion_loop()
+    except KeyboardInterrupt:
+        print("\nStopped by user.")

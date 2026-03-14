@@ -249,10 +249,12 @@ def get_stats(
     )
     q_avg = apply_filters(q_avg)
     avg_rows = q_avg.group_by(SocialActivity.source).all()
-    avg_sentiment_by_source = {
-        row[0]: round(float(row[1]), 4) if row[1] is not None else None
-        for row in avg_rows
-    }
+    avg_sentiment_by_source = {}
+    if avg_rows:
+        for row in avg_rows:
+            if row[0] is not None:
+                val = row[1]
+                avg_sentiment_by_source[row[0]] = round(float(val), 4) if val is not None else 0.0
 
     # Counts by sentiment label
     q_label = (
@@ -261,7 +263,7 @@ def get_stats(
     )
     q_label = apply_filters(q_label)
     label_rows = q_label.group_by(ProcessedActivity.sentiment_label).all()
-    by_sentiment_label = {row[0]: row[1] for row in label_rows}
+    by_sentiment_label = {row[0]: row[1] for row in label_rows if row[0] is not None}
 
     # Counts by topic
     q_topic = (
@@ -270,7 +272,7 @@ def get_stats(
     )
     q_topic = apply_filters(q_topic)
     topic_rows = q_topic.group_by(ProcessedActivity.topic).all()
-    by_topic = {row[0]: row[1] for row in topic_rows}
+    by_topic = {row[0]: row[1] for row in topic_rows if row[0] is not None}
 
     # Top 10 geocoded locations
     q_loc = (
