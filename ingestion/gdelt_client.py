@@ -27,11 +27,12 @@ from __future__ import annotations
 import io
 import logging
 import zipfile
+import time
+from datetime import datetime
 from typing import Optional
 
 import pandas as pd
 import requests
-import datetime
 
 from database.models import SocialActivity, SessionLocal
 

@@ -22,6 +22,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+import threading
 
 import os
 import uvicorn
@@ -43,14 +44,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Background tasks
 # ---------------------------------------------------------------------------
-_mastodon_task: asyncio.Task | None = None
-_rss_task: asyncio.Task | None = None
-_gdelt_task: asyncio.Task | None = None
-_worker_task: asyncio.Task | None = None
+_mastodon_thread: threading.Thread | None = None
+_rss_thread: threading.Thread | None = None
+_gdelt_thread: threading.Thread | None = None
+_worker_thread: threading.Thread | None = None
 
 
-async def _run_mastodon_stream() -> None:
-    """Run the Mastodon public stream in a thread."""
+def _run_mastodon_stream() -> None:
+    """Run the Mastodon public stream."""
     def _store(record: dict) -> None:
         db = SessionLocal()
         try:
@@ -79,22 +80,7 @@ async def _run_mastodon_stream() -> None:
         finally:
             db.close()
 
-    await asyncio.to_thread(stream_public, _store)
-
-
-async def _run_rss_poll() -> None:
-    """Run the RSS ingestion loop."""
-    await asyncio.to_thread(run_rss_ingestion_loop, poll_interval=300)
-
-
-async def _run_gdelt_poll() -> None:
-    """Run the GDELT ingestion loop."""
-    await asyncio.to_thread(run_gdelt_ingestion_loop, poll_interval=900)
-
-
-async def _run_nlp_worker() -> None:
-    """Run the NLP processing worker."""
-    await asyncio.to_thread(run_worker, poll_interval=10)
+    stream_public(_store)
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +91,7 @@ async def lifespan(app: FastAPI):
     """
     Application startup/shutdown.
     """
-    global _mastodon_task, _rss_task, _gdelt_task, _worker_task
+    global _mastodon_thread, _rss_thread, _gdelt_thread, _worker_thread
 
     logger.info("Coriolis starting up — creating DB tables if absent…")
     try:
@@ -114,27 +100,26 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Could not create DB tables: %s", exc)
 
-    # Launch background tasks
-    _mastodon_task = asyncio.create_task(_run_mastodon_stream())
-    _rss_task = asyncio.create_task(_run_rss_poll())
-    _gdelt_task = asyncio.create_task(_run_gdelt_poll())
-    _worker_task = asyncio.create_task(_run_nlp_worker())
+    # Launch background tasks as threads
+    _mastodon_thread = threading.Thread(target=_run_mastodon_stream, daemon=True)
+    _mastodon_thread.start()
+    
+    _rss_thread = threading.Thread(target=run_rss_ingestion_loop, kwargs={"poll_interval": 300}, daemon=True)
+    _rss_thread.start()
+    
+    _gdelt_thread = threading.Thread(target=run_gdelt_ingestion_loop, kwargs={"poll_interval": 900}, daemon=True)
+    _gdelt_thread.start()
+    
+    _worker_thread = threading.Thread(target=run_worker, kwargs={"poll_interval": 10}, daemon=True)
+    _worker_thread.start()
 
-    logger.info("All background tasks (Mastodon, RSS, GDELT, Worker) launched.")
+    logger.info("All background threads (Mastodon, RSS, GDELT, Worker) launched.")
 
     yield
 
-    # Shutdown
-    tasks = {
-        "Mastodon": _mastodon_task,
-        "RSS": _rss_task,
-        "GDELT": _gdelt_task,
-        "Worker": _worker_task,
-    }
-    for name, task in tasks.items():
-        if task and not task.done():
-            task.cancel()
-            logger.info("%s task cancelled.", name)
+    # Shutdown: daemon threads will be killed by the OS, but we can attempt graceful shutdown where possible.
+    # We do not block to join these infinite loops.
+    logger.info("Coriolis shutting down.")
 
 
 # ---------------------------------------------------------------------------
