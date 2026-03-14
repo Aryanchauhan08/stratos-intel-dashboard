@@ -210,17 +210,38 @@ def gkg_row_to_activity(row: pd.Series) -> dict:
     lon: Optional[float] = None
     raw_location: Optional[str] = None
 
-    loc_field = str(row.get("V1Locations", "") or "")
+    # Try V2EnhancedLocations (Column 10) first as it's more detailed, fallback to V1
+    loc_field = str(row.get("V2EnhancedLocations", "") or "")
+    if not loc_field:
+        loc_field = str(row.get("V1Locations", "") or "")
+    
     if loc_field:
-        first_block = loc_field.split(";")[0]
-        parts = first_block.split("#")
-        if len(parts) >= 7:
-            raw_location = parts[1] if parts[1] else None
+        # GDELT can have multiple locations; we take the first one with coordinates
+        blocks = loc_field.split(";")
+        for block in blocks:
+            parts = block.split("#")
+            # V1: type#name#country#adm1#lat#lon#featureid (7 parts)
+            # V2: type#name#country#adm1#adm2#lat#lon#featureid#offset (9 parts)
+            
+            # Use negative indexing to find lat/lon as they are usually 3rd/2nd from last 
+            # (ignoring offset/featureid at the tail)
             try:
-                lat = float(parts[4]) if parts[4] else None
-                lon = float(parts[5]) if parts[5] else None
+                if len(parts) >= 7:
+                    # Find candidate lat/lon pairs
+                    # In both formats, lat is parts[-3] or parts[-4] depending on extra info
+                    # Let's be explicit based on length
+                    if len(parts) >= 9: # V2
+                        p_lat, p_lon = parts[5], parts[6]
+                    else: # V1
+                        p_lat, p_lon = parts[4], parts[5]
+                        
+                    if p_lat and p_lon:
+                        lat = float(p_lat)
+                        lon = float(p_lon)
+                        raw_location = parts[1]
+                        break # Found valid coords
             except (ValueError, IndexError):
-                pass
+                continue
 
     themes_raw = str(row.get("V1Themes", "") or "")
     keywords = [t.strip() for t in themes_raw.split(";") if t.strip()]

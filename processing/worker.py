@@ -141,11 +141,22 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                         # Rate Limit: 1.1s delay after every geocoding attempt (inside process_post)
                         time.sleep(1.1)
 
-                        # Fallback Coordinates: 0,0 if geocoding failed
-                        if result.get("latitude") is None:
-                            result["latitude"] = 0.0
-                            result["longitude"] = 0.0
-                            if not result.get("geocoded_location"):
+                        # Fallback / Preserve Coordinates: use row.latitude if geocoding didn't find anything
+                        final_lat = result.get("latitude")
+                        final_lon = result.get("longitude")
+
+                        if (final_lat is None or final_lat == 0.0) and row.latitude is not None:
+                            final_lat = row.latitude
+                            final_lon = row.longitude
+                        
+                        if final_lat is None:
+                            final_lat = 0.0
+                            final_lon = 0.0
+
+                        if not result.get("geocoded_location") or result.get("geocoded_location") == "Unknown (Fallback)":
+                            if row.raw_location:
+                                result["geocoded_location"] = row.raw_location
+                            else:
                                 result["geocoded_location"] = "Unknown (Fallback)"
 
                         processed_row = ProcessedActivity(
@@ -155,8 +166,8 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                             source_text=row.text or "",
                             extracted_locations=result["extracted_locations"],
                             geocoded_location=result["geocoded_location"],
-                            latitude=result["latitude"],
-                            longitude=result["longitude"],
+                            latitude=final_lat,
+                            longitude=final_lon,
                             sentiment_score=result["sentiment_score"],
                             sentiment_label=result["sentiment_label"],
                             processed_at=datetime.now(timezone.utc),
