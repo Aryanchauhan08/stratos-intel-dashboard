@@ -25,9 +25,11 @@ Verified against live lastupdate.txt on 2026-03-06:
 from __future__ import annotations
 
 import io
+import json
 import logging
 import zipfile
 import time
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -37,6 +39,37 @@ import requests
 from database.models import SocialActivity, SessionLocal
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Geocoding Initialization
+# ---------------------------------------------------------------------------
+try:
+    from geopy.geocoders import Nominatim
+    from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+    geolocator = Nominatim(user_agent="stratos_intel_dashboard_gdelt")
+except ImportError:
+    geolocator = None
+    logger.warning("geopy not installed. Precise geocoding disabled.")
+
+GEO_CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "geocoding_cache.json")
+
+def load_geo_cache() -> dict:
+    if os.path.exists(GEO_CACHE_PATH):
+        try:
+            with open(GEO_CACHE_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning("Failed to parse geo cache: %s", e)
+    return {}
+
+def save_geo_cache(cache_data: dict):
+    try:
+        with open(GEO_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, indent=2)
+    except Exception as e:
+        logger.warning("Failed to save geo cache: %s", e)
+
+global_geo_cache = load_geo_cache()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -313,6 +346,34 @@ def run_gdelt_ingestion_loop(poll_interval: int = 900, max_rows: int = 100):
                 if db.query(exists().where(SocialActivity.external_id == record["external_id"])).scalar():
                     skipped_count += 1
                     continue
+
+                # Precise Geocoding Fallback for Extracted Locations
+                raw_loc = record.get("raw_location")
+                if raw_loc and geolocator:
+                    normalized_loc = raw_loc.lower().strip()
+                    if normalized_loc in global_geo_cache:
+                        cached = global_geo_cache[normalized_loc]
+                        if "lat" in cached and "lon" in cached:
+                            record["latitude"] = cached["lat"]
+                            record["longitude"] = cached["lon"]
+                    else:
+                        try:
+                            # Rate limit nominatim
+                            time.sleep(1.2)
+                            location = geolocator.geocode(raw_loc, timeout=10)
+                            if location:
+                                record["latitude"] = location.latitude
+                                record["longitude"] = location.longitude
+                                global_geo_cache[normalized_loc] = {
+                                    "lat": location.latitude,
+                                    "lon": location.longitude
+                                }
+                                save_geo_cache(global_geo_cache)
+                                logger.info("Geocoded new location: %s -> (%s, %s)", raw_loc, location.latitude, location.longitude)
+                        except (GeocoderTimedOut, GeocoderUnavailable) as e:
+                            logger.warning("Geocoding timeout for %s: %s", raw_loc, e)
+                        except Exception as e:
+                            logger.warning("Geocoding failed for %s: %s", raw_loc, e)
 
                 timestamp_str = record.get("timestamp")
                 dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")) if timestamp_str else None
