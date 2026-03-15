@@ -227,13 +227,13 @@ def stream_public(
             if new_count > 0:
                 logger.info("SUCCESS: Processed %d posts (topic: %s)", new_count, current_topic)
             
-            # Prune SQLite cache to prevent infinite growth (keep latest 10,000 hashes)
+            # Prune SQLite cache to prevent infinite growth (keep latest 1,500 hashes)
             conn.execute("""
                 DELETE FROM seen_hashes 
                 WHERE hash NOT IN (
                     SELECT hash FROM seen_hashes 
                     ORDER BY added_at DESC 
-                    LIMIT 10000
+                    LIMIT 1500
                 )
             """)
             conn.commit()
