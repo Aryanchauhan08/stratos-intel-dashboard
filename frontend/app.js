@@ -661,9 +661,21 @@ function applyDisplay(features, displayMode) {
    4. FILTER & DATA MANAGER
    ════════════════════════════════════════════════════════════ */
 
+function normalizeSource(val) {
+  if (!val) return '';
+  val = val.toLowerCase();
+
+  if (val === 'gdelt' || val === 'gdelt_gkg') return 'gdelt_gkg';
+  if (val === 'rss' || val === 'rss_feed') return 'rss_feed';
+
+  return val;
+}
+
 function getFilteredFeatures() {
   const srcFilter = document.getElementById('filter-source').value.toLowerCase();
   const sentFilter = document.getElementById('filter-sentiment').value;
+
+  const normalizedFilter = normalizeSource(srcFilter);
 
   return allFeatures.filter(f => {
     // Ensure feature has valid geometry and coordinates
@@ -679,7 +691,9 @@ function getFilteredFeatures() {
     const src = (props.source || props.source_type || '').toLowerCase();
     const sent = props.sentiment_label || '';
 
-    if (srcFilter && src !== srcFilter) return false;
+    const normalizedSource = normalizeSource(src);
+
+    if (normalizedFilter && normalizedSource !== normalizedFilter) return false;
     if (sentFilter && sent !== sentFilter) return false;
 
     return true;
