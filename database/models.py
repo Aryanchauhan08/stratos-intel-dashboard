@@ -64,6 +64,7 @@ class SocialActivity(Base):
     latitude      Parsed latitude  (nullable).
     longitude     Parsed longitude (nullable).
     keywords      JSON array of extracted keywords / themes.
+    external_id   Unique identifier from the source (e.g., GKGRECORDID, link, status_id).
     """
 
     __tablename__ = "social_activity"
@@ -127,6 +128,13 @@ class SocialActivity(Base):
         index=True,
         comment="Processing status: pending | processed | error",
     )
+    external_id = Column(
+        String(256),
+        nullable=True,
+        index=True,
+        unique=True,
+        comment="Unique identifier from the raw source for deduplication",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
@@ -146,6 +154,7 @@ class SocialActivity(Base):
             "latitude": self.latitude,
             "longitude": self.longitude,
             "keywords": self.keywords or [],
+            "external_id": self.external_id,
         }
 
 

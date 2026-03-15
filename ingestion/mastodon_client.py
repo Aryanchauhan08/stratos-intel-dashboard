@@ -98,6 +98,7 @@ def build_mastodon_record(status: dict, queried_topic: Optional[str] = None) -> 
         "latitude": None,
         "longitude": None,
         "keywords": keywords,
+        "external_id": status_id,
         # Extra context (not in DB schema but handy for debugging)
         "_meta": {
             "status_id": status_id,
@@ -269,6 +270,12 @@ if __name__ == "__main__":
             timestamp_str = record.get("timestamp")
             dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")) if timestamp_str else None
             
+            # Deduplication check
+            from sqlalchemy import exists
+            if db.query(exists().where(SocialActivity.external_id == record["external_id"])).scalar():
+                logger.info("[mastodon smoke] Duplicate skipped: %s", record["external_id"])
+                return
+
             activity = SocialActivity(
                 source=record["source"],
                 topic=record.get("topic"),
@@ -278,6 +285,7 @@ if __name__ == "__main__":
                 latitude=record.get("latitude"),
                 longitude=record.get("longitude"),
                 keywords=record.get("keywords") or [],
+                external_id=record.get("external_id"),
                 status="pending"
             )
             db.add(activity)

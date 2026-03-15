@@ -59,6 +59,13 @@ def _run_mastodon_stream() -> None:
             timestamp_str = record.get("timestamp")
             dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")) if timestamp_str else None
             
+            # Deduplication check using external_id (status_id)
+            from sqlalchemy import exists
+            external_id = record.get("external_id")
+            if external_id and db.query(exists().where(SocialActivity.external_id == external_id)).scalar():
+                logger.info("[mastodon] Duplicate skipped: %s", external_id)
+                return
+
             activity = SocialActivity(
                 source=record["source"],
                 topic=record.get("topic"),
@@ -68,6 +75,7 @@ def _run_mastodon_stream() -> None:
                 latitude=record.get("latitude"),
                 longitude=record.get("longitude"),
                 keywords=record.get("keywords") or [],
+                external_id=external_id,
                 status="pending"
             )
             db.add(activity)

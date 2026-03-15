@@ -54,7 +54,9 @@ def fetch_rss_feeds() -> int:
     Returns:
         The number of new articles inserted.
     """
+    import hashlib
     new_articles_count = 0
+    skipped_count = 0
     db = SessionLocal()
     
     try:
@@ -66,18 +68,23 @@ def fetch_rss_feeds() -> int:
                 title = getattr(entry, "title", "").strip()
                 summary = getattr(entry, "summary", "").strip()
                 link = getattr(entry, "link", "").strip()
+                guid = getattr(entry, "id", "").strip() # RSS guid is often in 'id'
                 
                 if not title:
                     continue
                 
-                # Deduplication logic: Check if an article with a very similar title already exists
-                # We use ilike to be case-insensitive and % around the title to catch minor variations
-                exists_query = db.query(SocialActivity).filter(
-                    SocialActivity.text.ilike(f"%{title}%")
-                ).first()
-                
-                if exists_query:
-                    # Duplicate found, skip
+                # Deduplication logic: Use link/guid if available, fallback to hash
+                external_id = guid or link
+                if not external_id:
+                    # Fallback to hash of (title + timestamp + source)
+                    # Note: entry.published or entry.updated might be present
+                    ts = getattr(entry, "published", getattr(entry, "updated", ""))
+                    hash_str = f"{title}|{ts}|rss"
+                    external_id = hashlib.sha256(hash_str.encode()).hexdigest()
+
+                # Optimized deduplication check using external_id
+                if db.query(exists().where(SocialActivity.external_id == external_id)).scalar():
+                    skipped_count += 1
                     continue
                 
                 # Combine title and summary for the text field
@@ -92,23 +99,23 @@ def fetch_rss_feeds() -> int:
                     source="rss",
                     topic="news", # Dynamically assign topic
                     text=combined_text,
+                    external_id=external_id,
                     status="pending"
                 )
                 
                 db.add(activity)
                 new_articles_count += 1
                 
-        # Commit all new articles for this cycle
-        try:
-            db.commit()
-            if new_articles_count > 0:
-                logger.info(f"SUCCESS: Processed {new_articles_count} new RSS articles")
-            else:
-                logger.info("No new RSS articles found this cycle.")
-        except Exception as e:
-            db.rollback()
-            print(f"CRITICAL DB SAVE ERROR (RSS): {e}")
-            logger.error(f"Critical SQL error during RSS commit: {e}")
+        if new_articles_count > 0:
+            try:
+                db.commit()
+                logger.info(f"SUCCESS: Processed {new_articles_count} new RSS articles (skipped {skipped_count} duplicates)")
+            except Exception as e:
+                db.rollback()
+                print(f"CRITICAL DB SAVE ERROR (RSS): {e}")
+                logger.error(f"Critical SQL error during RSS commit: {e}")
+        else:
+            logger.info(f"No new RSS articles found this cycle (skipped {skipped_count} duplicates).")
             
     except Exception as e:
         logger.error(f"Error while fetching RSS feeds: {e}")

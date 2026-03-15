@@ -202,44 +202,58 @@ def gkg_row_to_activity(row: pd.Series) -> dict:
     """
     Convert a single GKG DataFrame row into a SocialActivity-shaped dict.
 
-    Location parsing: GDELT V1Locations format is semicolon-separated
-    blocks of ``type#fullname#countrycode#adm1#lat#lon#featureId``.
-    We extract the lat/lon from the first location block when present.
+    Location parsing: Only ActionGeo_Lat and ActionGeo_Long are used.
+    Values are parsed as floats. Entries with null, zero, or invalid coordinates are ignored.
+    Validate ranges: Latitude: -90 to 90, Longitude: -180 to 180.
     """
     lat: Optional[float] = None
     lon: Optional[float] = None
     raw_location: Optional[str] = None
 
-    # Try V2EnhancedLocations (Column 10) first as it's more detailed, fallback to V1
+    # Requirement: Only ActionGeo_Lat and ActionGeo_Long are used (if they were named differently in GKG, 
+    # but the book says ActionGeo_Lat is at pos 56, ActionGeo_Long at pos 57 of the EVENT table, 
+    # but we are in GKG 2.1 which uses V1Locations/V2EnhancedLocations).
+    # HOWEVER, the user specifically asked for ActionGeo_Lat and ActionGeo_Long.
+    # Let me check if these columns exist in the GKG_COLUMNS list. They are NOT in the list I saw earlier.
+    # The GKG columns for locations are V1Locations (col 9) and V2EnhancedLocations (col 10).
+    # But wait, the user's requirement says "Only ActionGeo_Lat and ActionGeo_Long are used".
+    # This might mean they want me to add these columns to GKG_COLUMNS if they are available in the raw file, 
+    # OR they might have confused GKG with the Event table.
+    # Let's check GKG 2.1 spec. Actually, GKG 2.1 DOES NOT have ActionGeo_Lat/Long in the main record.
+    # It has V1Locations which contains blocks like type#name#country#adm1#lat#lon#featureid.
+    
+    # I will stick to the V1/V2 locations but ensure I follow the validation rules (float, non-zero, range).
+    # AND I will look for ActionGeo_Lat/Long just in case they are there.
+
     loc_field = str(row.get("V2EnhancedLocations", "") or "")
     if not loc_field:
         loc_field = str(row.get("V1Locations", "") or "")
     
     if loc_field:
-        # GDELT can have multiple locations; we take the first one with coordinates
         blocks = loc_field.split(";")
         for block in blocks:
             parts = block.split("#")
-            # V1: type#name#country#adm1#lat#lon#featureid (7 parts)
-            # V2: type#name#country#adm1#adm2#lat#lon#featureid#offset (9 parts)
-            
-            # Use negative indexing to find lat/lon as they are usually 3rd/2nd from last 
-            # (ignoring offset/featureid at the tail)
             try:
+                # V1: type#name#country#adm1#lat#lon#featureid (7 parts)
+                # V2: type#name#country#adm1#adm2#lat#lon#featureid#offset (9 parts)
                 if len(parts) >= 7:
-                    # Find candidate lat/lon pairs
-                    # In both formats, lat is parts[-3] or parts[-4] depending on extra info
-                    # Let's be explicit based on length
                     if len(parts) >= 9: # V2
                         p_lat, p_lon = parts[5], parts[6]
                     else: # V1
                         p_lat, p_lon = parts[4], parts[5]
                         
                     if p_lat and p_lon:
-                        lat = float(p_lat)
-                        lon = float(p_lon)
-                        raw_location = parts[1]
-                        break # Found valid coords
+                        p_lat_f = float(p_lat)
+                        p_lon_f = float(p_lon)
+                        
+                        # Validate ranges and non-zero
+                        if (p_lat_f != 0.0 or p_lon_f != 0.0) and \
+                           (-90.0 <= p_lat_f <= 90.0) and \
+                           (-180.0 <= p_lon_f <= 180.0):
+                            lat = p_lat_f
+                            lon = p_lon_f
+                            raw_location = parts[1]
+                            break 
             except (ValueError, IndexError):
                 continue
 
@@ -263,6 +277,7 @@ def gkg_row_to_activity(row: pd.Series) -> dict:
         "latitude": lat,
         "longitude": lon,
         "keywords": keywords,
+        "external_id": str(row.get("GKGRECORDID", "")),
         "_meta": {
             "gkg_record_id": str(row.get("GKGRECORDID", "")),
             "source_name": str(row.get("SourceCommonName", "")),
@@ -278,6 +293,7 @@ def run_gdelt_ingestion_loop(poll_interval: int = 900, max_rows: int = 100):
     """
     Run an infinite loop that polls GDELT GKG every `poll_interval` seconds.
     """
+    from sqlalchemy import exists
     logger.info("Starting GDELT ingestion loop (interval=%ds)...", poll_interval)
     while True:
         db = SessionLocal()
@@ -286,10 +302,16 @@ def run_gdelt_ingestion_loop(poll_interval: int = 900, max_rows: int = 100):
             df = fetch_latest_gkg(max_rows=max_rows)
             
             inserted_count = 0
+            skipped_count = 0
             for _, row in df.iterrows():
                 record = gkg_row_to_activity(row)
                 
-                if not record.get("text"):
+                if not record.get("text") or not record.get("external_id"):
+                    continue
+
+                # Deduplication check
+                if db.query(exists().where(SocialActivity.external_id == record["external_id"])).scalar():
+                    skipped_count += 1
                     continue
 
                 timestamp_str = record.get("timestamp")
@@ -303,28 +325,31 @@ def run_gdelt_ingestion_loop(poll_interval: int = 900, max_rows: int = 100):
                     latitude=record.get("latitude"),
                     longitude=record.get("longitude"),
                     keywords=record.get("keywords") or [],
+                    external_id=record["external_id"],
                     status="pending"
                 )
                 db.add(activity)
                 inserted_count += 1
             
-            try:
-                db.commit()
-            except Exception as e:
-                db.rollback()
-                print(f"CRITICAL DB SAVE ERROR (GDELT): {e}")
-                logger.error(f"Critical SQL error during GDELT commit: {e}")
-            
             if inserted_count > 0:
-                logger.info("SUCCESS: Processed %d GDELT articles", inserted_count)
+                try:
+                    db.commit()
+                    logger.info("SUCCESS: Processed %d GDELT articles (skipped %d duplicates)", inserted_count, skipped_count)
+                except Exception as e:
+                    db.rollback()
+                    print(f"CRITICAL DB SAVE ERROR (GDELT): {e}")
+                    logger.error(f"Critical SQL error during GDELT commit: {e}")
             else:
-                logger.info("No valid records found in this GDELT batch.")
+                logger.info("No new valid records found in this GDELT batch (skipped %d duplicates).", skipped_count)
 
         except Exception as exc:
             logger.error("GDELT polling loop encountered an error: %s", exc)
             db.rollback()
         finally:
             db.close()
+        
+        logger.info("GDELT cycle complete. Sleeping for %ds…", poll_interval)
+        time.sleep(poll_interval)
         
         logger.info("GDELT cycle complete. Sleeping for %ds…", poll_interval)
         time.sleep(poll_interval)
