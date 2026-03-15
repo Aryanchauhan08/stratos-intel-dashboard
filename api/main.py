@@ -164,10 +164,16 @@ def get_activity(
         elif src.lower() == "rss":
             display_source = "RSS_FEED"
 
+        # Coordinate order: GeoJSON requires [longitude, latitude]
+        # GDELT records in the database currently have these values swapped 
+        # (latitude stored in longitude field, and vice versa)
+        if src.lower() == "gdelt":
+            coords = [processed.latitude, processed.longitude]
+        else:
+            coords = [processed.longitude, processed.latitude]
+
         feature = GeoJsonFeature(
-            geometry=GeoJsonGeometry(
-                coordinates=[processed.longitude, processed.latitude]
-            ),
+            geometry=GeoJsonGeometry(coordinates=coords),
             properties=ActivityProperties(
                 id=str(processed.id),
                 source=display_source,
