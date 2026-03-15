@@ -120,12 +120,6 @@ class SocialActivity(Base):
         default=list,
         comment="JSON array of extracted keywords / themes",
     )
-    external_id = Column(
-        String(255),
-        unique=True,
-        nullable=True,
-        comment="Source-specific external ID for deduplication",
-    )
     status = Column(
         String(32),
         nullable=False,

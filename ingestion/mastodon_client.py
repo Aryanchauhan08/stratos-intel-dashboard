@@ -98,7 +98,6 @@ def build_mastodon_record(status: dict, queried_topic: Optional[str] = None) -> 
         "latitude": None,
         "longitude": None,
         "keywords": keywords,
-        "external_id": status_id,
         # Extra context (not in DB schema but handy for debugging)
         "_meta": {
             "status_id": status_id,
@@ -166,14 +165,6 @@ def stream_public(
     on_activity = on_activity or (lambda record: None)
     
     logger.info("Starting Mastodon REST polling (interval=%ds)…", poll_interval)
-    
-    import hashlib
-    import sqlite3
-    
-    cache_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mastodon_hash_cache.db")
-    conn = sqlite3.connect(cache_db_path)
-    conn.execute("CREATE TABLE IF NOT EXISTS seen_hashes (hash TEXT PRIMARY KEY, added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-    conn.commit()
 
     posts_yielded = 0
     
@@ -200,36 +191,11 @@ def stream_public(
             new_count = 0
             # Reverse statuses so oldest in the batch are processed first
             for status in reversed(statuses):
-                raw_text = strip_html(status.get("content", ""))
-                url = status.get("url", "")
-                
-                # Content properties for robust deduplication
-                content_to_hash = raw_text if raw_text.strip() else url
-                normalized_content = content_to_hash.lower().strip()
-                
-                if not normalized_content:
-                    continue
-                    
-                hash_hex = hashlib.md5(normalized_content.encode("utf-8")).hexdigest()
-                
-                # Check persistent cache
-                cursor = conn.execute("SELECT 1 FROM seen_hashes WHERE hash = ?", (hash_hex,))
-                if cursor.fetchone() is not None:
-                    continue
                 try:
                     record = build_mastodon_record(status, queried_topic=current_topic)
-                    
-                    # 2. Pagination/State Bug: Only advance tracking if DB save succeeds
-                    success = on_activity(record)
-                    if success is False:
-                        logger.warning("Postgres save failed for status %s. Delaying SQLite cache mark.", status.get("id"))
-                        continue
-                    
-                    # Mark as seen in SQLite cache *ONLY AFTER* successful PostgreSQL insertion
-                    conn.execute("INSERT INTO seen_hashes (hash) VALUES (?)", (hash_hex,))
-                    conn.commit()
-                    
+                    on_activity(record)
                     posts_yielded += 1
+                    new_count += 1
                     
                     if max_posts and posts_yielded >= max_posts:
                         logger.info("Stream ended cleanly (max_posts %d reached).", max_posts)
@@ -239,17 +205,6 @@ def stream_public(
             
             if new_count > 0:
                 logger.info("SUCCESS: Processed %d posts (topic: %s)", new_count, current_topic)
-            
-            # Prune SQLite cache to prevent infinite growth (keep latest 1,500 hashes)
-            conn.execute("""
-                DELETE FROM seen_hashes 
-                WHERE hash NOT IN (
-                    SELECT hash FROM seen_hashes 
-                    ORDER BY added_at DESC 
-                    LIMIT 1500
-                )
-            """)
-            conn.commit()
 
         except Exception as exc:
             logger.warning("Mastodon polling error: %s — will retry in %ds", exc, poll_interval)
