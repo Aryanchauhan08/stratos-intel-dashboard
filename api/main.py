@@ -39,6 +39,24 @@ from api.schemas import (
 api_router = APIRouter(tags=["API v1"])
 
 
+def normalize_source(val: Optional[str]) -> Optional[str]:
+    """
+    Map frontend source labels to internal database source names.
+    - 'GDELT_GKG' -> 'gdelt'
+    - 'RSS_FEED'  -> 'rss'
+    - 'MASTODON'  -> 'mastodon'
+    """
+    if not val:
+        return None
+
+    v = val.lower()
+    if v in ["gdelt", "gdelt_gkg"]:
+        return "gdelt"
+    if v in ["rss", "rss_feed"]:
+        return "rss"
+    return v
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/activity
 # ---------------------------------------------------------------------------
@@ -124,13 +142,9 @@ def get_activity(
     )
 
     # Optional filters
-    if source is not None:
-        source_val = source.lower()
-        if source_val == "gdelt_gkg":
-            source_val = "gdelt"
-        elif source_val == "rss_feed":
-            source_val = "rss"
-        query = query.filter(func.lower(SocialActivity.source) == source_val)
+    source_db = normalize_source(source)
+    if source_db:
+        query = query.filter(SocialActivity.source == source_db)
 
     if min_sentiment is not None:
         query = query.filter(ProcessedActivity.sentiment_score >= min_sentiment)
