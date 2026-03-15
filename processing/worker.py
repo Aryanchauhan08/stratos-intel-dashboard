@@ -53,6 +53,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger("coriolis.worker")
 
+# ---------------------------------------------------------------------------
+# Storage Limit: 1,000-post rolling FIFO buffer
+# ---------------------------------------------------------------------------
+STORAGE_LIMIT = 1_000
+
+def prune_processed_activity(db) -> None:
+    """Enforce a hard cap of STORAGE_LIMIT rows in processed_activity."""
+    from sqlalchemy import text
+    total: int = db.query(ProcessedActivity).count()
+    if total <= STORAGE_LIMIT:
+        return
+
+    try:
+        db.execute(
+            text(
+                """
+                DELETE FROM processed_activity
+                WHERE id NOT IN (
+                    SELECT id FROM processed_activity
+                    ORDER BY processed_at DESC
+                    LIMIT :limit
+                )
+                """
+            ),
+            {"limit": STORAGE_LIMIT},
+        )
+
+        pruned = total - STORAGE_LIMIT
+        print(
+            f"[MAINTENANCE] Storage limit reached. "
+            f"Pruned {pruned} old posts to maintain {STORAGE_LIMIT:,} post buffer."
+        )
+        logger.info(
+            "[MAINTENANCE] Pruned %d old posts from processed_activity (limit=%d).",
+            pruned,
+            STORAGE_LIMIT,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to execute storage limit prune: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # Core worker logic
@@ -75,6 +115,15 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
     load_models()
     logger.info("Models loaded. Checking DB tables…")
     create_tables()
+
+    # Initial Prune: clear any backlog from previous runs
+    try:
+        db_init = SessionLocal()
+        prune_processed_activity(db_init)
+        db_init.commit()
+        db_init.close()
+    except Exception as exc:
+        logger.warning(f"Initial storage limit prune failed: {exc}")
 
     logger.info("Starting infinite polling loop (interval=%ds).", poll_interval)
     
@@ -217,6 +266,10 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                 if batch_processed > 0:
                     print(f"[WORKER] Successfully processed {batch_processed} items")
                     logger.info("SUCCESS: Processed %d posts", batch_processed)
+                    
+                    # Enforce the 1,000-row storage cap after every successful commit
+                    prune_processed_activity(db)
+                    db.commit()
 
         except Exception as exc:  # noqa: BLE001
             logger.critical("Worker error during polling cycle: %s", exc)

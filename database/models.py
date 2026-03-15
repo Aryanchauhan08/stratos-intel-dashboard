@@ -233,6 +233,7 @@ class ProcessedActivity(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+        index=True,
         comment="UTC datetime this record was created by the worker",
     )
 
