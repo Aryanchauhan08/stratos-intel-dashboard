@@ -167,7 +167,14 @@ def stream_public(
     
     logger.info("Starting Mastodon REST polling (interval=%ds)…", poll_interval)
     
-    seen_ids: dict[str, bool] = {}  # Acts as an insertion-ordered set
+    import hashlib
+    import sqlite3
+    
+    cache_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mastodon_hash_cache.db")
+    conn = sqlite3.connect(cache_db_path)
+    conn.execute("CREATE TABLE IF NOT EXISTS seen_hashes (hash TEXT PRIMARY KEY, added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    conn.commit()
+
     posts_yielded = 0
     
     import itertools
@@ -183,12 +190,27 @@ def stream_public(
             new_count = 0
             # Reverse statuses so oldest in the batch are processed first
             for status in reversed(statuses):
-                status_id = str(status.get("id", ""))
-                if not status_id or status_id in seen_ids:
+                raw_text = strip_html(status.get("content", ""))
+                url = status.get("url", "")
+                
+                # Content properties for robust deduplication
+                content_to_hash = raw_text if raw_text.strip() else url
+                normalized_content = content_to_hash.lower().strip()
+                
+                if not normalized_content:
+                    continue
+                    
+                hash_hex = hashlib.md5(normalized_content.encode("utf-8")).hexdigest()
+                
+                # Check persistent cache
+                cursor = conn.execute("SELECT 1 FROM seen_hashes WHERE hash = ?", (hash_hex,))
+                if cursor.fetchone() is not None:
                     continue
                 
                 # Mark as seen
-                seen_ids[status_id] = True
+                conn.execute("INSERT INTO seen_hashes (hash) VALUES (?)", (hash_hex,))
+                conn.commit()
+                
                 new_count += 1
                 
                 try:
@@ -200,17 +222,21 @@ def stream_public(
                         logger.info("Stream ended cleanly (max_posts %d reached).", max_posts)
                         return
                 except Exception as exc:
-                    logger.warning("Failed to process status %s: %s", status_id, exc)
+                    logger.warning("Failed to process status %s: %s", status.get("id", "UNKNOWN"), exc)
             
             if new_count > 0:
                 logger.info("SUCCESS: Processed %d posts (topic: %s)", new_count, current_topic)
             
-            # Prune seen_ids to prevent memory leaks over days of polling
-            if len(seen_ids) > 10000:
-                # Remove the oldest 5000 IDs (dict keys are insertion ordered >py3.7)
-                keys = list(seen_ids.keys())
-                for k in keys[:5000]:
-                    del seen_ids[k]
+            # Prune SQLite cache to prevent infinite growth (keep latest 10,000 hashes)
+            conn.execute("""
+                DELETE FROM seen_hashes 
+                WHERE hash NOT IN (
+                    SELECT hash FROM seen_hashes 
+                    ORDER BY added_at DESC 
+                    LIMIT 10000
+                )
+            """)
+            conn.commit()
 
         except Exception as exc:
             logger.warning("Mastodon polling error: %s — will retry in %ds", exc, poll_interval)
