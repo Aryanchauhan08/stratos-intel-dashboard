@@ -78,34 +78,34 @@ def prune_processed_activity(db) -> None:
     if total <= STORAGE_LIMIT:
         return
 
-    # Use a single raw-SQL DELETE for maximum efficiency.
-    # The sub-query is ordered by processed_at DESC so the newest rows are
-    # kept and the oldest are removed.  The index on processed_at makes this
-    # operation near-instant regardless of table size.
-    db.execute(
-        text(
-            """
-            DELETE FROM processed_activity
-            WHERE id NOT IN (
-                SELECT id FROM processed_activity
-                ORDER BY processed_at DESC
-                LIMIT :limit
-            )
-            """
-        ),
-        {"limit": STORAGE_LIMIT},
-    )
+    try:
+        # Use a single raw-SQL DELETE for maximum efficiency.
+        db.execute(
+            text(
+                """
+                DELETE FROM processed_activity
+                WHERE id NOT IN (
+                    SELECT id FROM processed_activity
+                    ORDER BY processed_at DESC
+                    LIMIT :limit
+                )
+                """
+            ),
+            {"limit": STORAGE_LIMIT},
+        )
 
-    pruned = total - STORAGE_LIMIT
-    print(
-        f"[MAINTENANCE] Storage limit reached. "
-        f"Pruned {pruned} old posts to maintain {STORAGE_LIMIT:,} post buffer."
-    )
-    logger.info(
-        "[MAINTENANCE] Pruned %d old posts from processed_activity (limit=%d).",
-        pruned,
-        STORAGE_LIMIT,
-    )
+        pruned = total - STORAGE_LIMIT
+        print(
+            f"[MAINTENANCE] Storage limit reached. "
+            f"Pruned {pruned} old posts to maintain {STORAGE_LIMIT:,} post buffer."
+        )
+        logger.info(
+            "[MAINTENANCE] Pruned %d old posts from processed_activity (limit=%d).",
+            pruned,
+            STORAGE_LIMIT,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to execute storage limit prune: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +129,15 @@ def run_worker(limit: int = 1000, batch_size: int = 50, poll_interval: int = 10)
     load_models()
     logger.info("Models loaded. Checking DB tables…")
     create_tables()
+
+    # Initial Prune: clear any backlog from previous runs where it exceeded the limit
+    try:
+        db_init = SessionLocal()
+        prune_processed_activity(db_init)
+        db_init.commit()
+        db_init.close()
+    except Exception as exc:
+        logger.warning(f"Initial storage limit prune failed: {exc}")
 
     logger.info("Starting infinite polling loop (interval=%ds).", poll_interval)
     
