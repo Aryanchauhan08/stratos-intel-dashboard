@@ -940,7 +940,7 @@ async function fetchActivity(background = false) {
   if (search) url.searchParams.set('search', search);
   if (timeRange) url.searchParams.set('time_range', timeRange);
 
-  url.searchParams.set('limit', '2000'); // Standard fetch limit
+  url.searchParams.set('limit', '1000'); // Standard fetch limit aligned with DB cap
 
   const overlay = document.getElementById('loading-overlay');
   const dot = document.getElementById('status-dot');

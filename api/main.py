@@ -141,8 +141,8 @@ def get_activity(
     limit: int = Query(
         default=500,
         ge=1,
-        le=2000,
-        description="Maximum number of features to return (default 500, max 2 000).",
+        le=1000,
+        description="Maximum number of features to return (default 500, max 1000).",
     ),
     db: Session = Depends(get_db),
 ) -> FeatureCollection:
