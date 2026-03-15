@@ -185,7 +185,17 @@ def stream_public(
         try:
             current_topic = next(topic_cycle)
             # Fetch up to 20 latest posts from the current hashtag
-            statuses = client.timeline_hashtag(current_topic, limit=20)
+            logger.info("[Mastodon] Requesting API for #%s with limit=20...", current_topic)
+            try:
+                statuses = client.timeline_hashtag(current_topic, limit=20)
+                logger.info("[Mastodon] Received HTTP 200 (Found %d posts).", len(statuses))
+            except Exception as http_err:
+                if "429" in str(http_err) or "RateLimit" in str(type(http_err).__name__):
+                    logger.warning("[Mastodon] HTTP 429 Rate Limit Hit for #%s", current_topic)
+                else:
+                    logger.warning("[Mastodon] API Request failed for #%s: %s", current_topic, http_err)
+                time.sleep(poll_interval)
+                continue
             
             new_count = 0
             # Reverse statuses so oldest in the batch are processed first
@@ -206,16 +216,19 @@ def stream_public(
                 cursor = conn.execute("SELECT 1 FROM seen_hashes WHERE hash = ?", (hash_hex,))
                 if cursor.fetchone() is not None:
                     continue
-                
-                # Mark as seen
-                conn.execute("INSERT INTO seen_hashes (hash) VALUES (?)", (hash_hex,))
-                conn.commit()
-                
-                new_count += 1
-                
                 try:
                     record = build_mastodon_record(status, queried_topic=current_topic)
-                    on_activity(record)
+                    
+                    # 2. Pagination/State Bug: Only advance tracking if DB save succeeds
+                    success = on_activity(record)
+                    if success is False:
+                        logger.warning("Postgres save failed for status %s. Delaying SQLite cache mark.", status.get("id"))
+                        continue
+                    
+                    # Mark as seen in SQLite cache *ONLY AFTER* successful PostgreSQL insertion
+                    conn.execute("INSERT INTO seen_hashes (hash) VALUES (?)", (hash_hex,))
+                    conn.commit()
+                    
                     posts_yielded += 1
                     
                     if max_posts and posts_yielded >= max_posts:

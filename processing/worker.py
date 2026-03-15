@@ -253,11 +253,23 @@ def run_worker(limit: int = 500, batch_size: int = 50, poll_interval: int = 10) 
                         # COMMIT IMMEDIATELY after each successful (or fallback) geocode
                         db.commit()
 
+                        # COMMIT IMMEDIATELY after each successful (or fallback) geocode
+                        db.commit()
+
                     except Exception as exc:  # noqa: BLE001
+                        db.rollback()  # 1. CRUCIAL: Unpoison the session first!
                         logger.error("Error processing row %s: %s", row.id, exc)
-                        row.status = "error"
-                        db.flush()
-                        db.commit() # Commit the error status
+                        
+                        try:
+                            # 2. Open a clean transaction to mark the item as 'error'
+                            row_refresh = db.query(SocialActivity).get(row.id)
+                            if row_refresh:
+                                row_refresh.status = "error"
+                                db.commit()
+                        except Exception as inner_exc:
+                            db.rollback()
+                            logger.error("Failed to even save error status: %s", inner_exc)
+                        
                         stats["errors"] += 1
 
                     # Throttling to prevent CPU/Memory spikes in cloud

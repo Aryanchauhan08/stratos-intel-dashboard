@@ -52,7 +52,7 @@ _worker_thread: threading.Thread | None = None
 
 def _run_mastodon_stream() -> None:
     """Run the Mastodon public stream."""
-    def _store(record: dict) -> None:
+    def _store(record: dict) -> bool:
         db = SessionLocal()
         try:
             from datetime import datetime
@@ -64,7 +64,7 @@ def _run_mastodon_stream() -> None:
             external_id = record.get("external_id")
             if external_id and db.query(exists().where(SocialActivity.external_id == external_id)).scalar():
                 logger.info("[mastodon] Duplicate skipped: %s", external_id)
-                return
+                return False
 
             activity = SocialActivity(
                 source=record["source"],
@@ -81,10 +81,12 @@ def _run_mastodon_stream() -> None:
             db.add(activity)
             db.commit()
             logger.info("[mastodon] Saved: %s", record.get("text", "")[:80])
+            return True
         except Exception as e:
             db.rollback()
             print(f"CRITICAL DB SAVE ERROR (Mastodon): {e}")
             logger.error(f"Critical SQL error during Mastodon save: {e}")
+            return False
         finally:
             db.close()
 
